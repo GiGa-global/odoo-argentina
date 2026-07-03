@@ -109,7 +109,8 @@ class AccountPayment(models.Model):
             # empieza a salir un raise que no deja editar cosas
             rec.amount = amount if amount > 0 else 0
             # Sincronizar amount_exact con el nuevo amount para mantener consistencia
-            rec.amount_exact = rec.amount
+            if not rec.currency_id.is_zero(rec.amount - rec.amount_exact):
+                rec.amount_exact = rec.amount
             # rec.unreconciled_amount = rec.to_pay_amount - rec.selected_debt
 
     @api.onchange("partner_id")
@@ -319,6 +320,26 @@ class AccountPayment(models.Model):
                     rec.l10n_ar_withholding_line_ids = commands
 
         return super().action_post()
+
+    def action_draft(self):
+        # The supplier payment receipt PDF is cached (attachment_use on
+        # account.report_payment_receipt). Resetting to draft means the payment
+        # may be edited (amounts, withholdings, reconciliation) and reposted
+        # under the same name, which would otherwise serve the stale cached PDF.
+        # Drop the cached receipt so it is regenerated on the next render.
+        self._unlink_cached_payment_receipt()
+        return super().action_draft()
+
+    def _unlink_cached_payment_receipt(self):
+        report = self.env.ref("account.action_report_payment_receipt", raise_if_not_found=False)
+        if not report:
+            return
+        for payment in self:
+            # retrieve_attachment evalúa la misma expresión `attachment` del
+            # reporte (devuelve None si no corresponde cachear, p.ej. clientes).
+            attachment = report.retrieve_attachment(payment)
+            if attachment:
+                attachment.unlink()
 
     @api.model
     def _get_trigger_fields_to_synchronize(self):
